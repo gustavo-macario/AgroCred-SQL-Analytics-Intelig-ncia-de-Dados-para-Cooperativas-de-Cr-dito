@@ -656,3 +656,186 @@ from emprestimo e
 join parcela p on e.ID_Emprestimo = p.ID_Emprestimo
 group by e.ID_Emprestimo, p.Numero_Parcela
 having count(*) > 1;
+
+-- Desafio 31: A Moda dos Juros (Mode)
+-- Descubra qual é a Taxa de Juros Anual (da tabela Modalidade_Credito) que é mais frequentemente contratada pelos clientes da cooperativa. 
+-- Retorne a taxa de juros e quantas vezes ela apareceu nos empréstimos.
+
+select md.Taxa_Juros_Anual, count(md.Taxa_Juros_Anual) as qtde_contratada 
+from Modalidade_Credito md
+join emprestimo e on md.ID_Modalidade = e.ID_Modalidade 
+group by md.Taxa_Juros_Anual
+order by count(md.Taxa_Juros_Anual) desc
+limit 1;
+
+
+-- Desafio 32: Amplitude de Risco por Agência (Range)
+-- Para cada Nome_Agencia, calcule o valor do Maior Empréstimo, o valor do Menor Empréstimo, e a Amplitude (Maior - Menor). 
+-- Retorne apenas as agências onde a amplitude supera R$ 50.000,00.
+
+with max_min as (
+select a.ID_Agencia, a.Nome_Agencia,
+max(e.Valor_Contratado) as maior,
+min(e.Valor_Contratado) as menor
+from cooperado co   
+join agencia a on co.ID_Agencia = a.ID_Agencia
+join conta ct on co.ID_Cooperado = ct.ID_Cooperado
+join emprestimo e on ct.ID_Conta = e.id_conta
+group by a.ID_Agencia, a.Nome_Agencia
+)
+select nome_agencia,
+maior - menor as amplitude
+from max_min
+where maior - menor > 50000
+order by amplitude desc;
+
+
+-- Desafio 33: A Mediana do Ticket Médio (Median via Window Functions)
+-- Encontre a Mediana do Valor_Contratado de todos os empréstimos.
+
+with ordenando as (
+select Valor_Contratado,
+row_number() over (order by Valor_Contratado asc) as rank,
+count(*) over () as total
+from emprestimo
+)
+select Valor_Contratado as mediana
+from ordenando
+where rank = (total + 1) / 2;
+
+
+-- Desafio 34: Variância Populacional do Crédito (Variance)
+-- Calcule a Variância dos valores contratados na cooperativa inteira.
+
+select 
+round(AVG(Valor_Contratado * Valor_Contratado) - (AVG(Valor_Contratado) * AVG(Valor_Contratado)), 2) as variancia
+from emprestimo;
+
+
+-- Desafio 35: O Desvio Padrão (Standard Deviation)
+-- Calcule o Desvio Padrão global do Valor_Contratado. Retorne o valor arredondado em duas casas decimais.
+
+with variancia_calc as (
+select 
+AVG(Valor_Contratado * Valor_Contratado) - (AVG(Valor_Contratado) * AVG(Valor_Contratado)) as valor
+from emprestimo 
+)
+select 
+round(sqrt(valor), 2) as desvio_padrao
+from variancia_calc;
+
+
+-- Desafio 36: Coeficiente de Variação (CV)
+-- Calcule o Coeficiente de Variação para cada Perfil_Produtor. Descubra qual perfil de cliente tem o comportamento financeiro mais "instável". 
+-- Retorne o Perfil e o CV formatado.
+
+with media_variancia as (
+     select 
+         co.Perfil_Produtor,
+         avg(e.Valor_Contratado) as media,
+         AVG(e.Valor_Contratado * e.Valor_Contratado) 
+         - (AVG(e.Valor_Contratado) * AVG(e.Valor_Contratado)) as variancia
+     from cooperado co   
+     join conta ct on co.ID_Cooperado = ct.ID_Cooperado
+     join emprestimo e on ct.ID_Conta = e.ID_Conta
+     group by co.Perfil_Produtor
+)
+select 
+     Perfil_Produtor,
+     round((sqrt(variancia) / media) * 100, 2) as Coeficiente_Variacao
+from media_variancia
+order by Coeficiente_Variacao desc;
+
+
+-- Desafio 37: Caça aos Outliers via Z-Score
+-- Liste o ID do Empréstimo, o Valor Contratado e o Z-Score de todos os empréstimos. 
+-- Filtre para mostrar apenas os empréstimos cujo Z-Score seja maior que 2.
+
+with media_desvio_padrao as (
+     select 
+         avg(Valor_Contratado) as media,
+         sqrt(
+             AVG(Valor_Contratado * Valor_Contratado) 
+             - (AVG(Valor_Contratado) * AVG(Valor_Contratado))
+         ) as desvio_padrao
+     from emprestimo
+)
+select *
+from (
+     select 
+         e.ID_Emprestimo,
+         e.Valor_Contratado,
+         (e.Valor_Contratado - m.media) / m.desvio_padrao as z_score
+     from emprestimo e
+     cross join media_desvio_padrao m
+)
+where z_score > 2;
+
+
+-- Desafio 38: Percentil 90 (P90)
+-- Usando a função NTILE(10) baseada no Valor Contratado em ordem crescente, descubra qual é o valor de corte do 10º grupo (o grupo do topo).
+
+with percentil as (
+select valor_contratado,
+NTILE(10) over (order by valor_contratado asc) rank
+from emprestimo
+)
+select MIN(valor_contratado) AS p90
+from percentil
+where rank = 10;
+
+
+-- Desafio 39: Correlação Intuitiva (Idade de Conta vs. Volume de Crédito)
+-- Agrupe os cooperados pelo "Tempo de Casa em Anos" na data em que pegaram o empréstimo. 
+-- Para cada faixa de ano, calcule a Média do Valor Contratado. Ordene pelo tempo de casa.
+
+with Tempo_Casa_Anos as (
+     select co.Nome_Completo, e.Valor_Contratado,
+     CAST(strftime('%Y', e.Data_Contratacao) AS INTEGER) - CAST(strftime('%Y', co.Data_Associacao) AS INTEGER) as anos
+     from cooperado co   
+     join conta ct on co.ID_Cooperado = ct.ID_Cooperado
+     join emprestimo e on ct.ID_Conta = e.ID_Conta
+)
+select anos,
+avg(Valor_Contratado) as ticket_medio
+from Tempo_Casa_Anos
+group by anos
+order by anos asc;
+
+
+-- Desafio 40: Assimetria (Skewness)
+-- Tente montar uma única query que retorne a Média, a Mediana e a Moda global do Valor_Contratado para analisar a distribuição.
+
+WITH ordenando AS (
+     SELECT 
+         Valor_Contratado,
+         ROW_NUMBER() OVER (ORDER BY Valor_Contratado ASC) AS rank,
+         COUNT(*) OVER () AS total
+     FROM emprestimo
+),
+mediana_calc AS (
+     SELECT 
+         AVG(Valor_Contratado) AS mediana
+     FROM ordenando
+     WHERE rank IN (total / 2, total / 2 + 1, (total + 1) / 2)
+),
+media_calc AS (
+     SELECT 
+         AVG(Valor_Contratado) AS media
+     FROM emprestimo
+),
+moda_calc AS (
+     SELECT 
+         Valor_Contratado AS moda
+     FROM emprestimo
+     GROUP BY Valor_Contratado
+     ORDER BY COUNT(*) DESC
+     LIMIT 1
+)
+SELECT 
+     media,
+     mediana,
+     moda
+FROM media_calc
+CROSS JOIN mediana_calc
+CROSS JOIN moda_calc;
