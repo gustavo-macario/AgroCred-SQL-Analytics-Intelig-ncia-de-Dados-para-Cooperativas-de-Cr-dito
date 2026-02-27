@@ -456,4 +456,203 @@ join agencia a on co.ID_Agencia  = a.ID_Agencia
 join conta ct on co.ID_Cooperado = ct.ID_Cooperado
 join emprestimo e on ct.ID_Conta = e.id_conta
 join parcela p on e.ID_Emprestimo = p.ID_Emprestimo 
+
 group by a.Nome_Agencia;
+
+-- Desafio 21: Fraude de "Associação Relâmpago" (Time-to-Action)
+-- O time de Prevenção a Fraudes notou um padrão suspeito: pessoas se associando à cooperativa e pegando empréstimos gigantes logo em seguida, 
+-- com intenção de calote.
+-- A Tarefa: Liste todos os cooperados que contrataram seu primeiro empréstimo em um prazo de 30 dias ou menos após a sua Data_Associacao. 
+-- Retorne o nome do cooperado, a data de associação, a data do empréstimo e a quantidade de dias entre os dois eventos.
+
+with emprestimo_data as (
+select co.ID_Cooperado, co.Nome_Completo, co.Data_Associacao, e.Data_Contratacao,
+row_number() over (PARTITION BY co.ID_Cooperado order by e.Data_Contratacao asc) as primeiro_emprestimo_co
+from cooperado co
+join agencia a on co.ID_Agencia = a.ID_Agencia 
+join conta ct on co.ID_Cooperado = ct.ID_Cooperado
+join emprestimo e on ct.ID_Conta = e.id_conta
+),
+
+diferenca_de_dias as (
+select Nome_Completo, Data_Associacao, Data_Contratacao,
+julianday(Data_Contratacao) - julianday(Data_Associacao) as diferenca_dias
+from emprestimo_data
+where primeiro_emprestimo_co = 1
+)
+
+select * from diferenca_de_dias
+where diferenca_dias >= 0 and diferenca_dias <= 30;
+
+
+-- Desafio 22: Auditoria de Sistema (Mismatch de Contrato vs. Parcelas)
+-- A TI relatou um possível bug onde o sistema gerou parcelas erradas na hora de fechar o contrato. O valor total das parcelas deveria ser,
+-- no mínimo, igual ou maior (devido aos juros) que o valor contratado.
+-- A Tarefa: Encontre os contratos onde a soma de todas as parcelas geradas para ele seja estritamente menor que o Valor_Contratado do empréstimo.
+-- Retorne o ID do Empréstimo, o Nome do Cliente, o Valor Contratado e a Soma das Parcelas.
+
+select e.ID_Emprestimo, co.nome_completo, e.Valor_Contratado, 
+COALESCE(sum(p.Valor_Parcela), 0) as total_parcelas
+from cooperado co   
+join agencia a on co.ID_Agencia = a.ID_Agencia 
+join conta ct on co.ID_Cooperado = ct.ID_Cooperado
+join emprestimo e on ct.ID_Conta = e.id_conta
+left join parcela p on e.ID_Emprestimo = p.ID_Emprestimo 
+group by e.ID_Emprestimo, co.nome_completo, e.Valor_Contratado
+having COALESCE(sum(p.Valor_Parcela), 0) < e.Valor_Contratado;
+
+
+-- Desafio 23: Sazonalidade por Agência (Rank Temporal)
+-- A diretoria quer saber qual foi o "Mês de Ouro" de cada agência no ano de 2024 para planejar as férias dos gerentes.
+-- A Tarefa: Para cada Agência, descubra qual foi o Mês (ex: '05' para maio) que teve o maior volume total financeiro (Valor_Contratado)
+-- liberado em empréstimos no ano de 2024. Retorne o Nome da Agência, o Mês de Ouro e o Valor Total Liberado naquele mês.
+
+with total_e_mes as (
+select a.ID_Agencia, a.Nome_Agencia, substr(e.Data_Contratacao, 1, 7) as mes, 
+sum(e.Valor_Contratado) as total
+from cooperado co   
+join agencia a on co.ID_Agencia = a.ID_Agencia 
+join conta ct on co.ID_Cooperado = ct.ID_Cooperado
+join emprestimo e on ct.ID_Conta = e.id_conta
+where e.Data_Contratacao >= '2024-01-01'
+and e.Data_Contratacao < '2025-01-01' 
+group by a.ID_Agencia, a.Nome_Agencia, substr(e.Data_Contratacao, 1, 7)
+),
+
+rank as (
+select Nome_Agencia, mes, total,
+row_number() over (PARTITION BY Nome_Agencia order by total desc) as ranqueado
+from total_e_mes
+)
+
+select Nome_Agencia, mes, total from rank
+where ranqueado = 1;
+
+
+-- Desafio 24: Tempo até a Ruína (Time-to-Default)
+-- Para modelagem de risco, os cientistas de dados precisam saber quanto tempo um cliente "ruim" demora para dar o primeiro calote.
+-- A Tarefa: Olhando apenas para os empréstimos que hoje estão com o status Inadimplente, calcule a diferença em dias entre a Data_Contratacao do empréstimo e a
+-- Data_Vencimento da primeira parcela (a mais antiga) que ficou com status Atrasada. Retorne o ID do Empréstimo e os dias até a ruína.
+
+select 
+    e.ID_Emprestimo,
+    min(julianday(p.Data_Vencimento)) - julianday(e.Data_Contratacao) as dias_ate_ruina
+from emprestimo e
+join parcela p 
+    on e.ID_Emprestimo = p.ID_Emprestimo
+where e.Status_Contrato = 'Inadimplente'
+and p.Status_Parcela = 'Atrasada'
+group by 
+    e.ID_Emprestimo,
+    e.Data_Contratacao;
+
+
+-- Desafio 25: Clientes Recuperados (Análise de Cohort/Comportamento)
+-- O time de CRM quer premiar clientes que já deram problema no passado, mas "limparam o nome" e voltaram a fazer negócio de forma saudável.
+-- A Tarefa: Liste o nome dos cooperados que se encaixam na seguinte regra simultânea: Possuem pelo menos um contrato histórico com status Inadimplente
+-- E possuem atualmente pelo menos um contrato com status Ativo.
+
+select 
+    co.Nome_Completo
+from cooperado co
+join conta ct on co.ID_Cooperado = ct.ID_Cooperado
+join emprestimo e on ct.ID_Conta = e.ID_Conta
+group by co.ID_Cooperado, co.Nome_Completo
+having
+count(case when e.Status_Contrato = 'Inadimplente' then 1 end) > 0
+and count(case when e.Status_Contrato = 'Ativo' then 1 end) > 0;
+
+
+-- Desafio 26: O Efeito Robin Hood (Análise de Decis - NTILE 10)
+-- O Risco quer validar uma tese: "Os maiores produtores são mais pontuais que os pequenos?". Vamos testar os extremos.
+-- A Tarefa: Usando NTILE(10) baseado no volume financeiro total (Valor_Contratado) histórico de cada cliente, separe a base em 10 grupos.
+-- Retorne apenas os clientes que caíram no Grupo 1 (os top 10% maiores tomadores) e os clientes que caíram no Grupo 10 (os bottom 10% menores tomadores).
+-- Exiba o Nome, o Perfil do Produtor, o Volume Total e a qual Decil (1 ou 10) ele pertence.
+
+with total_cooperados as (
+select co.Nome_Completo, co.Perfil_Produtor,
+sum(e.Valor_Contratado) as total
+from cooperado co   
+join agencia a on co.ID_Agencia = a.ID_Agencia 
+join conta ct on co.ID_Cooperado = ct.ID_Cooperado
+join emprestimo e on ct.ID_Conta = e.id_conta
+group by co.ID_Cooperado, co.Nome_Completo, co.Perfil_Produtor
+),
+
+classificacao  as (
+select *,
+ntile(10) over (order by total desc) as Decil
+from total_cooperados
+)
+
+select * from classificacao  
+where Decil in (1,10);
+
+
+-- Desafio 27: A Linha do Tempo do Caixa (Running Total Cooperativo)
+-- A tesouraria precisa ver o "sangramento" do caixa dia após dia no ano de 2024, independentemente da agência.
+-- A Tarefa: Liste todas as datas exatas (dia, mês e ano) em que houve contratação de empréstimos em 2024. 
+-- Mostre o valor total contratado naquele dia e adicione uma coluna de Soma Acumulada exibindo o montante total de dinheiro que já havia saído 
+-- do caixa da AgroCred desde o dia 01/01/2024 até aquela data específica.
+
+with total_por_dia as (
+select sum(e.Valor_Contratado) as total, e.Data_Contratacao
+from cooperado co   
+join agencia a on co.ID_Agencia = a.ID_Agencia 
+join conta ct on co.ID_Cooperado = ct.ID_Cooperado
+join emprestimo e on ct.ID_Conta = e.id_conta
+where e.Data_Contratacao >= '2024-01-01' and e.Data_Contratacao < '2025-01-01'
+group by e.Data_Contratacao
+)
+
+select *,
+sum(total) over (order by Data_Contratacao) as soma_acumulada
+from total_por_dia;
+
+
+-- Desafio 28: Esforço de Cobrança (Proporção de Quantidade)
+-- As agências estão reclamando que passam o dia todo ligando para cobrar clientes. Vamos descobrir quem trabalha mais nisso.
+-- A Tarefa: Crie um relatório por Nome_Agencia que calcule a taxa de esforço de cobrança. A regra é: Quantidade de parcelas Atrasadas da agência dividida 
+-- pela Quantidade Total de parcelas geradas por aquela agência (independente do status). Retorne a taxa em formato percentual com duas casas decimais. 
+-- Aqui o foco é em contagem de boletos (COUNT), não em valor financeiro.
+
+select a.Nome_Agencia,
+round(
+    count(case when p.Status_Parcela = 'Atrasada' then 1 end) * 100.0
+    / nullif(count(p.id_parcela), 0),
+2) as taxa_esforco_cobranca
+from cooperado co   
+join agencia a on co.ID_Agencia = a.ID_Agencia 
+join conta ct on co.ID_Cooperado = ct.ID_Cooperado
+join emprestimo e on ct.ID_Conta = e.id_conta
+join parcela p on e.ID_Emprestimo = p.ID_Emprestimo
+group by a.ID_Agencia, a.Nome_Agencia;
+
+
+-- Desafio 29: O Risco Especulativo (Cruzamento de Regras)
+-- O Banco Central mandou um alerta sobre empréstimos de longo prazo para pequenos produtores.
+-- A Tarefa: Encontre os contratos Ativos atrelados a clientes com Perfil_Produtor = 'Pequeno', onde o prazo gerado (quantidade de parcelas daquele empréstimo) 
+-- seja maior que 24 meses, e onde a Taxa_Juros_Anual da modalidade escolhida seja superior a 10%. Retorne o nome do cliente,
+-- a modalidade e a quantidade exata de parcelas daquele contrato.
+
+select co.Nome_Completo, md.Nome_Modalidade, count(p.id_parcela) as total_parcelas
+from cooperado co   
+join conta ct on co.ID_Cooperado = ct.ID_Cooperado
+join emprestimo e on ct.ID_Conta = e.id_conta
+join Modalidade_Credito md on e.ID_Modalidade = md.ID_Modalidade
+join parcela p on e.ID_Emprestimo = p.ID_Emprestimo
+where e.Status_Contrato = 'Ativo' and co.Perfil_Produtor = 'Pequeno'  and md.Taxa_Juros_Anual > 10
+group by e.ID_Emprestimo, co.Nome_Completo, md.Nome_Modalidade
+having count(p.id_parcela) > 24;
+
+
+-- Desafio 30: Detecção de Duplicidade (Self-Join ou CTE avançada)
+-- O sistema de pagamentos via PIX deu um "soluço" e suspeitamos que algumas parcelas foram registradas duas vezes para o mesmo contrato.
+-- A Tarefa: Verifique se existe alguma anomalia na base: Liste os IDs de empréstimo que possuem mais de uma parcela cadastrada com exatamente o 
+-- mesmo Numero_Parcela (por exemplo, duas parcelas "número 2" para o mesmo contrato).
+
+select e.ID_Emprestimo 
+from emprestimo e 
+join parcela p on e.ID_Emprestimo = p.ID_Emprestimo
+group by e.ID_Emprestimo, p.Numero_Parcela
+having count(*) > 1;
